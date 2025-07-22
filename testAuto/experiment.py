@@ -9,6 +9,7 @@ import datetime
 import getpass
 import logging
 import random
+import subprocess
 
 from config import (
     progress_tracker, experiment_state, DEFAULT_MONITORING_TIME,
@@ -845,9 +846,61 @@ def post_experimentation(experiment_name, concurrency, iteration, experiment_id,
         log_error(f"[post-exp] Critical error during post-experimentation: {str(e)}")
         print_step("POST-EXPERIMENT", "FAILED", f"Critical error: {str(e)}")
         return False
+# --- New helper functions for pre-experimentation step ---
+def _print_step_preexp(msg):
+    print(f"[STEP] {msg}")
+
+def _run_command_preexp(description, command):
+    _print_step_preexp(f"Starting: {description}")
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    if result.returncode == 0:
+        _print_step_preexp(f"PASS: {description}")
+    else:
+        _print_step_preexp(f"ERROR: {description} failed")
+        print(f"STDOUT:\n{result.stdout}")
+        print(f"STDERR:\n{result.stderr}")
+        raise RuntimeError(f"Command failed: {' '.join(command)}")
+
 
 def pre_experimentation(experiment_name, concurrency, iteration, experiment_id):
     """Set up environment for an experiment by starting monitoring scripts."""
+
+    # --- NEW: Pre-experimentation data sync and clean step ---
+    try:
+        # Kill inotifywait if running
+        result = subprocess.run(["sudo", "pkill", "inotifywait"])
+        if result.returncode in (0, 1):
+            _print_step_preexp("PRE-EXPERIMENT: inotifywait is not running or has been successfully killed.")
+        else:
+            raise RuntimeError("Failed to run pkill for inotifywait")
+
+        # Local rsync
+        _run_command_preexp(
+            "Local rsync to convsrc2",
+            ["rsync", "-av", "/var/log/exp/", "/mnt/LONTAS/ExpControl/pobo22/exp/raw/convsrc2/"]
+        )
+
+        # Remote rsync from connt1
+        _run_command_preexp(
+            "Remote rsync from connt1",
+            ["rsync", "-av", "connt1:/var/log/exp/", "/mnt/LONTAS/ExpControl/pobo22/exp/raw/connt1/"]
+        )
+
+        # Remote rsync from connt2
+        _run_command_preexp(
+            "Remote rsync from connt2",
+            ["rsync", "-av", "connt2:/var/log/exp/", "/mnt/LONTAS/ExpControl/pobo22/exp/raw/connt2/"]
+        )
+
+        _print_step_preexp("All steps completed .")
+
+    except Exception as e:
+        _print_step_preexp(f"FAILED: {e}")
+        # Optionally, return False or raise to halt further setup
+        return False
+    # --- END NEW PRE-EXPERIMENTATION BLOCK ---
+
     automation_mode = get_automation_mode()
     
     # First print for quiet mode
